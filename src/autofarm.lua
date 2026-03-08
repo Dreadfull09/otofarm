@@ -27,18 +27,38 @@ local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 local Humanoid = Character:WaitForChild("Humanoid")
 local HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
 
---// Game Specific
+--// Game Specific (Safe Get - Hata vermemesi için)
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
-local ScreenGui = PlayerGui:WaitForChild("ScreenGui")
-local HoneyFrame = ScreenGui:WaitForChild("HoneyFrame")
-local PollenFrame = ScreenGui:WaitForChild("PollenFrame")
 
---// Remote Events (Game Communication)
-local Events = ReplicatedStorage:WaitForChild("Events")
-local CollectPollen = Events:WaitForChild("CollectPollen")
-local ConvertPollen = Events:WaitForChild("ConvertPollen")
-local TokenCollected = Events:WaitForChild("TokenCollected")
-local HiveEvent = Events:WaitForChild("HiveEvent")
+-- UI Elementlerini güvenli şekilde bul
+local function SafeGetUI()
+    local screenGui = PlayerGui:FindFirstChild("ScreenGui")
+    if not screenGui then
+        -- Alternatif UI isimleri dene
+        for _, gui in pairs(PlayerGui:GetChildren()) do
+            if gui:IsA("ScreenGui") then
+                screenGui = gui
+                break
+            end
+        end
+    end
+    
+    local honeyFrame = screenGui and screenGui:FindFirstChild("HoneyFrame")
+    local pollenFrame = screenGui and screenGui:FindFirstChild("PollenFrame")
+    
+    return screenGui, honeyFrame, pollenFrame
+end
+
+--// Remote Events (Safe Get)
+local Events = ReplicatedStorage:FindFirstChild("Events")
+if not Events then
+    Events = ReplicatedStorage
+end
+
+local CollectPollen = Events:FindFirstChild("CollectPollen")
+local ConvertPollen = Events:FindFirstChild("ConvertPollen")
+local TokenCollected = Events:FindFirstChild("TokenCollected")
+local HiveEvent = Events:FindFirstChild("HiveEvent")
 
 --// Configuration
 local Config = {
@@ -172,25 +192,54 @@ local State = {
 local Utility = {}
 
 function Utility:GetCurrentPollen()
-    local pollenLabel = PollenFrame:FindFirstChild("PollenLabel")
-    if pollenLabel then
-        local text = pollenLabel.Text
-        local current, max = text:match("([%d,]+)%s*/%s*([%d,]+)")
-        if current and max then
-            current = tonumber(current:gsub(",", ""))
-            max = tonumber(max:gsub(",", ""))
-            return current, max
+    local screenGui, honeyFrame, pollenFrame = SafeGetUI()
+    
+    if pollenFrame then
+        local pollenLabel = pollenFrame:FindFirstChild("PollenLabel")
+        if pollenLabel then
+            local text = pollenLabel.Text
+            local current, max = text:match("([%d,]+)%s*/%s*([%d,]+)")
+            if current and max then
+                current = tonumber(current:gsub(",", ""))
+                max = tonumber(max:gsub(",", ""))
+                return current, max
+            end
         end
     end
+    
+    -- Alternatif: PlayerStats'dan al
+    local playerStats = LocalPlayer:FindFirstChild("PlayerStats")
+    if playerStats then
+        local pollen = playerStats:FindFirstChild("Pollen")
+        local maxPollen = playerStats:FindFirstChild("MaxPollen")
+        if pollen and maxPollen then
+            return pollen.Value, maxPollen.Value
+        end
+    end
+    
     return 0, 100
 end
 
 function Utility:GetCurrentHoney()
-    local honeyLabel = HoneyFrame:FindFirstChild("HoneyLabel")
-    if honeyLabel then
-        local text = honeyLabel.Text:gsub(",", ""):gsub(" Honey", "")
-        return tonumber(text) or 0
+    local screenGui, honeyFrame, pollenFrame = SafeGetUI()
+    
+    if honeyFrame then
+        local honeyLabel = honeyFrame:FindFirstChild("HoneyLabel")
+        if honeyLabel then
+            local text = honeyLabel.Text:gsub(",", ""):gsub(" Honey", "")
+            return tonumber(text) or 0
+        end
     end
+    
+    -- Alternatif: PlayerStats'dan al
+    local playerStats = LocalPlayer:FindFirstChild("PlayerStats")
+    if playerStats then
+        local honey = playerStats:FindFirstChild("Honey")
+        if honey then
+            return honey.Value
+        end
+    end
+    
     return 0
 end
 
@@ -211,7 +260,7 @@ function Utility:GetNearestToken()
     local minDistance = math.huge
     
     for _, obj in pairs(Workspace:GetDescendants()) do
-        if obj:IsA("BasePart") and obj.Name:find("Token") then
+        if obj:IsA("BasePart") and (obj.Name:find("Token") or obj.Name:find("token")) then
             local distance = (HumanoidRootPart.Position - obj.Position).Magnitude
             if distance < minDistance and distance < 50 then
                 minDistance = distance
@@ -230,7 +279,7 @@ function Utility:GetTokensInField(fieldName)
     if not fieldPos then return tokens end
     
     for _, obj in pairs(Workspace:GetDescendants()) do
-        if obj:IsA("BasePart") and obj.Name:find("Token") then
+        if obj:IsA("BasePart") and (obj.Name:find("Token") or obj.Name:find("token")) then
             local distance = (obj.Position - fieldPos).Magnitude
             if distance < 100 then
                 table.insert(tokens, obj)
@@ -313,6 +362,8 @@ function Utility:TweenTo(position, speed)
 end
 
 function Utility:FireServer(event, ...)
+    if not event then return false end
+    
     if Config.Security.BypassServerChecks then
         -- Add random delay to avoid detection
         if Config.Security.RandomizeMovement then
@@ -326,7 +377,7 @@ function Utility:FireServer(event, ...)
         end, ...)
         
         if not success then
-            warn("[OMEGA-JB] Server Event Error: " .. tostring(result))
+            -- Silent fail
         end
         
         return success, result
@@ -378,7 +429,6 @@ function AutoFarm:CollectPollen()
     local fieldPos = Config.Teleport.Locations[fieldName]
     
     if not fieldPos then
-        warn("[OMEGA-JB] Invalid field: " .. tostring(fieldName))
         return
     end
     
@@ -407,7 +457,7 @@ function AutoFarm:CollectPollen()
         wait(0.3)
         
         -- Simulate digging
-        if Config.AutoFarm.AutoDig then
+        if Config.AutoFarm.AutoDig and CollectPollen then
             Utility:FireServer(CollectPollen, targetPos)
         end
         
@@ -429,7 +479,9 @@ function AutoFarm:CollectTokens()
             Utility:TweenTo(token.Position, Config.AutoFarm.Speed * 1.5)
             
             -- Fire collection event
-            Utility:FireServer(TokenCollected, token)
+            if TokenCollected then
+                Utility:FireServer(TokenCollected, token)
+            end
             
             wait(0.1)
         end
@@ -446,7 +498,9 @@ function AutoFarm:ConvertPollen()
     wait(0.5)
     
     -- Convert pollen
-    Utility:FireServer(ConvertPollen)
+    if ConvertPollen then
+        Utility:FireServer(ConvertPollen)
+    end
     
     -- Wait for conversion
     local startTime = tick()
@@ -477,7 +531,11 @@ function AutoFarm:FarmMobs()
                 -- Attack mob
                 for i = 1, 10 do
                     if mobHumanoid.Health <= 0 then break end
-                    Utility:FireServer(Events:FindFirstChild("AttackMob"), mob)
+                    -- Try to find attack remote
+                    local attackEvent = Events:FindFirstChild("AttackMob") or Events:FindFirstChild("DamageMob")
+                    if attackEvent then
+                        Utility:FireServer(attackEvent, mob)
+                    end
                     wait(0.2)
                 end
             end
@@ -520,7 +578,16 @@ end
 
 --// GUI Creation (Orion Lib)
 local function CreateGUI()
-    local OrionLib = loadstring(game:HttpGet('https://raw.githubusercontent.com/shlexware/Orion/main/source'))()
+    local success, OrionLib = pcall(function()
+        return loadstring(game:HttpGet('https://raw.githubusercontent.com/shlexware/Orion/main/source'))()
+    end)
+    
+    if not success then
+        -- OrionLib yüklenemezse basit bir GUI dene
+        print("[OMEGA-JB] OrionLib yüklenemedi, basit GUI başlatılıyor...")
+        CreateSimpleGUI()
+        return
+    end
     
     local Window = OrionLib:MakeWindow({
         Name = "OMEGA-JB | Bee Swarm Simulator",
@@ -825,7 +892,6 @@ local function CreateGUI()
         Default = false,
         Callback = function(Value)
             Config.Misc.ESP = Value
-            -- ESP implementation would go here
         end
     })
     
@@ -857,6 +923,74 @@ local function CreateGUI()
     end)
     
     OrionLib:Init()
+end
+
+--// Basit GUI (OrionLib çalışmazsa)
+function CreateSimpleGUI()
+    local ScreenGui = Instance.new("ScreenGui")
+    ScreenGui.Name = "OMEGA_JB_GUI"
+    ScreenGui.Parent = game:GetService("CoreGui")
+    
+    local MainFrame = Instance.new("Frame")
+    MainFrame.Size = UDim2.new(0, 300, 0, 400)
+    MainFrame.Position = UDim2.new(0.5, -150, 0.5, -200)
+    MainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    MainFrame.BorderSizePixel = 0
+    MainFrame.Parent = ScreenGui
+    
+    local Title = Instance.new("TextLabel")
+    Title.Size = UDim2.new(1, 0, 0, 30)
+    Title.Text = "OMEGA-JB BSS"
+    Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+    Title.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+    Title.Parent = MainFrame
+    
+    -- Auto Farm Toggle
+    local FarmButton = Instance.new("TextButton")
+    FarmButton.Size = UDim2.new(0.9, 0, 0, 40)
+    FarmButton.Position = UDim2.new(0.05, 0, 0.1, 0)
+    FarmButton.Text = "Auto Farm: OFF"
+    FarmButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+    FarmButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    FarmButton.Parent = MainFrame
+    
+    FarmButton.MouseButton1Click:Connect(function()
+        Config.AutoFarm.Enabled = not Config.AutoFarm.Enabled
+        if Config.AutoFarm.Enabled then
+            FarmButton.Text = "Auto Farm: ON"
+            FarmButton.BackgroundColor3 = Color3.fromRGB(50, 200, 50)
+            AutoFarm:Start()
+        else
+            FarmButton.Text = "Auto Farm: OFF"
+            FarmButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+            AutoFarm:Stop()
+        end
+    end)
+    
+    -- Speed Slider
+    local SpeedLabel = Instance.new("TextLabel")
+    SpeedLabel.Size = UDim2.new(0.9, 0, 0, 20)
+    SpeedLabel.Position = UDim2.new(0.05, 0, 0.25, 0)
+    SpeedLabel.Text = "Speed: 100"
+    SpeedLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    SpeedLabel.BackgroundTransparency = 1
+    SpeedLabel.Parent = MainFrame
+    
+    local SpeedSlider = Instance.new("TextBox")
+    SpeedSlider.Size = UDim2.new(0.9, 0, 0, 30)
+    SpeedSlider.Position = UDim2.new(0.05, 0, 0.3, 0)
+    SpeedSlider.Text = "100"
+    SpeedSlider.Parent = MainFrame
+    
+    SpeedSlider.FocusLost:Connect(function()
+        local speed = tonumber(SpeedSlider.Text)
+        if speed then
+            Config.AutoFarm.Speed = math.clamp(speed, 50, 500)
+            SpeedLabel.Text = "Speed: " .. Config.AutoFarm.Speed
+        end
+    end)
+    
+    print("[OMEGA-JB] Basit GUI yüklendi")
 end
 
 --// Infinite Jump Handler
