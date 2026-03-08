@@ -392,19 +392,25 @@ local AntiDetection = {}
 function AntiDetection:Initialize()
     if not Config.Security.AntiDetection then return end
     
-    -- Hook Humanoid Properties
-    if Config.Security.SpoofHumanoid then
-        local oldIndex
-        oldIndex = hookmetamethod(game, "__index", function(self, key)
-            if self == Humanoid then
-                if key == "WalkSpeed" then
-                    return 16 -- Return default value
-                elseif key == "JumpPower" then
-                    return 50 -- Return default value
+    -- Hook Humanoid Properties (sadece destekleyen executor'lerde)
+    if Config.Security.SpoofHumanoid and hookmetamethod then
+        local success, err = pcall(function()
+            local oldIndex
+            oldIndex = hookmetamethod(game, "__index", function(self, key)
+                if self == Humanoid then
+                    if key == "WalkSpeed" then
+                        return 16 -- Return default value
+                    elseif key == "JumpPower" then
+                        return 50 -- Return default value
+                    end
                 end
-            end
-            return oldIndex(self, key)
+                return oldIndex(self, key)
+            end)
         end)
+        
+        if not success then
+            print("[OMEGA-JB] hookmetamethod desteklenmiyor, atlanıyor...")
+        end
     end
     
     -- Anti-AFK
